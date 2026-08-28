@@ -1,0 +1,109 @@
+/* PacGUI Modern Adwaita Stylesheet */
+
+.badge-pill {
+    padding: 3px 8px;
+    border-radius: 12px;
+    font-size: 0.78rem;
+    font-weight: bold;
+}
+
+.badge-installed {
+    background-color: rgba(46, 194, 126, 0.2);
+    color: #2ec27e;
+    border: 1px solid rgba(46, 194, 126, 0.4);
+}
+
+.badge-repo {
+    background-color: rgba(53, 132, 228, 0.2);
+    color: #3584e4;
+    border: 1px solid rgba(53, 132, 228, 0.4);
+}
+
+.badge-update {
+    background-color: rgba(230, 97, 0, 0.2);
+    color: #e66100;
+    border: 1px solid rgba(230, 97, 0, 0.4);
+}
+
+.badge-orphan {
+    background-color: rgba(224, 27, 36, 0.2);
+    color: #e01b24;
+    border: 1px solid rgba(224, 27, 36, 0.4);
+}
+
+.badge-aur {
+    background-color: rgba(145, 65, 172, 0.2);
+    color: #c061cb;
+    border: 1px solid rgba(145, 65, 172, 0.4);
+}
+
+.package-title {
+    font-size: 1.05rem;
+    font-weight: 700;
+}
+
+.package-version {
+    font-size: 0.85rem;
+    opacity: 0.7;
+    font-family: monospace;
+}
+
+.package-desc {
+    font-size: 0.88rem;
+    opacity: 0.85;
+}
+
+.terminal-window {
+    background-color: #1a1a1a;
+    color: #f6f6f6;
+    border-radius: 8px;
+    font-family: "JetBrains Mono", "Fira Code", "Source Code Pro", monospace;
+    font-size: 0.9rem;
+    padding: 12px;
+}
+
+.terminal-textview {
+    background-color: transparent;
+    color: #e0e0e0;
+    font-family: monospace;
+}
+
+.sidebar-category-btn {
+    border-radius: 8px;
+    padding: 8px 12px;
+    margin: 2px 6px;
+}
+
+.sidebar-badge {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-radius: 10px;
+    padding: 2px 6px;
+    font-size: 0.75rem;
+    font-weight: bold;
+}
+
+.stat-card {
+    background: alpha(@card_bg_color, 0.8);
+    border-radius: 12px;
+    padding: 16px;
+    border: 1px solid alpha(@borders, 0.5);
+}
+
+.stat-number {
+    font-size: 1.8rem;
+    font-weight: 800;
+}
+
+.stat-label {
+    font-size: 0.85rem;
+    opacity: 0.7;
+}
+
+.code-pill {
+    background-color: alpha(@window_fg_color, 0.08);
+    border-radius: 6px;
+    padding: 2px 6px;
+    font-family: monospace;
+    font-size: 0.85rem;
+}
