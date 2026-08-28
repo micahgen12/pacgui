@@ -16,7 +16,7 @@ from backend.models import TransactionTask
 
 
 class TransactionRunner:
-    """Runs pacman / yay / paccache commands in background with live terminal streaming."""
+    """Runs pacman / yay / flatpak / reflector commands in background with live terminal streaming."""
 
     def __init__(self):
         self._current_proc: Optional[subprocess.Popen] = None
@@ -30,7 +30,11 @@ class TransactionRunner:
 
     def build_command(self, task: TransactionTask, aur_helper: Optional[str] = None) -> List[str]:
         """Generate the shell command list based on transaction type."""
+        if task.extra_command:
+            return task.extra_command
+
         pkgs = [p.strip() for p in task.packages if p.strip()]
+        rem_pkgs = [p.strip() for p in task.remove_packages if p.strip()]
 
         if task.action_type == "install":
             if task.use_aur_helper and aur_helper:
@@ -50,6 +54,25 @@ class TransactionRunner:
                 return [aur_helper, "-Syu", "--noconfirm"] + task.flags
             return ["pkexec", "pacman", "-Syu", "--noconfirm"] + task.flags
 
+        elif task.action_type == "batch":
+            # Formulate combined or chained batch execution
+            parts = []
+            if rem_pkgs:
+                parts.append(f"pacman -Rns --noconfirm {' '.join(rem_pkgs)}")
+            if pkgs:
+                if task.use_aur_helper and aur_helper:
+                    parts.append(f"{aur_helper} -S --noconfirm {' '.join(pkgs)}")
+                else:
+                    parts.append(f"pacman -S --noconfirm --needed {' '.join(pkgs)}")
+
+            if not parts:
+                return ["echo", "No packages in batch queue."]
+
+            cmd_str = " && ".join(parts)
+            if task.use_aur_helper and aur_helper and not rem_pkgs:
+                return ["bash", "-c", cmd_str]
+            return ["pkexec", "bash", "-c", cmd_str]
+
         elif task.action_type == "clean_cache":
             if shutil.which("paccache"):
                 return ["pkexec", "paccache", "-r"]
@@ -62,6 +85,23 @@ class TransactionRunner:
 
         elif task.action_type == "remove_orphans":
             return ["pkexec", "pacman", "-Rns", "--noconfirm"] + pkgs + task.flags
+
+        elif task.action_type == "unlock_db":
+            return ["pkexec", "rm", "-f", "/var/lib/pacman/db.lck"]
+
+        elif task.action_type == "repair_keyring":
+            return ["pkexec", "bash", "-c", "pacman-key --init && pacman-key --populate"]
+
+        elif task.action_type == "flatpak_install":
+            app_id = pkgs[0] if pkgs else ""
+            return ["flatpak", "install", "-y", "flathub", app_id]
+
+        elif task.action_type == "flatpak_remove":
+            app_id = pkgs[0] if pkgs else ""
+            return ["flatpak", "uninstall", "-y", app_id]
+
+        elif task.action_type == "flatpak_update":
+            return ["flatpak", "update", "-y"]
 
         elif task.action_type == "custom":
             return task.flags
@@ -94,7 +134,6 @@ class TransactionRunner:
                 master_fd, slave_fd = pty.openpty()
                 self._master_fd = master_fd
 
-                # Set environment for clean UTF-8 output
                 env = os.environ.copy()
                 env["LC_ALL"] = "C.UTF-8"
                 env["LANG"] = "C.UTF-8"
@@ -110,7 +149,6 @@ class TransactionRunner:
                 os.close(slave_fd)
                 slave_fd = None
 
-                # Read output chunks and stream lines
                 buffer = ""
                 while self._is_running and self._current_proc.poll() is None:
                     r, _, _ = select.select([master_fd], [], [], 0.05)
@@ -121,7 +159,6 @@ class TransactionRunner:
                                 break
                             text = raw.decode("utf-8", errors="replace")
                             buffer += text
-                            # Split by \n or carriage returns \r for progress bars
                             lines = buffer.split("\n")
                             for line in lines[:-1]:
                                 GLib.idle_add(on_output, line + "\n")
@@ -129,7 +166,6 @@ class TransactionRunner:
                         except OSError:
                             break
 
-                # Read any remaining output
                 if master_fd is not None:
                     try:
                         r, _, _ = select.select([master_fd], [], [], 0.1)

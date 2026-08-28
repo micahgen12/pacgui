@@ -12,6 +12,38 @@ import pyalpm
 from backend.models import LogEntry, PackageInfo, UpdateInfo
 
 
+CATEGORY_KEYWORDS = {
+    "development": [
+        "devel", "base-devel", "compiler", "ide", "debugger", "python", "rust", "golang",
+        "java", "c++", "gcc", "clang", "cmake", "ninja", "git", "sdk", "llvm", "glibc",
+    ],
+    "multimedia": [
+        "multimedia", "audio", "video", "sound", "player", "music", "codec", "vlc", "mpv",
+        "ffmpeg", "pipewire", "pulseaudio", "alsa", "gstreamer", "midi", "recorder",
+    ],
+    "internet": [
+        "network", "browser", "web", "http", "ssh", "mail", "ftp", "torrent", "chat",
+        "messaging", "discord", "telegram", "matrix", "wifi", "vpn", "dns", "client",
+    ],
+    "graphics": [
+        "graphics", "image", "photo", "drawing", "paint", "3d", "blender", "gimp",
+        "inkscape", "svg", "png", "jpeg", "font", "rendering", "viewer",
+    ],
+    "system": [
+        "base", "system", "sys-utils", "kernel", "driver", "terminal", "shell", "disk",
+        "filesystem", "grub", "boot", "pacman", "systemd", "btrfs", "zfs", "firmware",
+    ],
+    "games": [
+        "games", "game", "emulator", "steam", "wine", "proton", "vulkan", "retro",
+        "lutris", "arcade", "rpg", "fps", "simulation",
+    ],
+    "office": [
+        "office", "document", "pdf", "spreadsheet", "word", "writer", "calc",
+        "reader", "viewer", "latex", "markdown", "epub", "notes",
+    ],
+}
+
+
 class AlpmManager:
     """High performance ALPM manager wrapping pyalpm."""
 
@@ -53,8 +85,7 @@ class AlpmManager:
             for repo in self.registered_repos:
                 try:
                     self.handle.register_syncdb(repo, pyalpm.SIG_DATABASE_OPTIONAL)
-                except Exception as e:
-                    # Database file might not exist yet or error registering
+                except Exception:
                     pass
             self.refresh_cache()
         except Exception as e:
@@ -83,6 +114,11 @@ class AlpmManager:
         except Exception as e:
             print(f"Error caching sync dbs: {e}")
 
+    def is_db_locked(self) -> bool:
+        """Check if pacman database lock file exists."""
+        lock_path = os.path.join(self.db_path, "db.lck")
+        return os.path.exists(lock_path)
+
     def _convert_alpm_pkg(self, pkg: pyalpm.Package, repo_name: Optional[str] = None, load_deep: bool = False) -> PackageInfo:
         """Convert a pyalpm.Package object to PackageInfo dataclass."""
         is_installed = False
@@ -95,7 +131,6 @@ class AlpmManager:
             loc_pkg = self._local_cache[pkg.name]
             installed_ver = loc_pkg.version
             is_explicit = (loc_pkg.reason == pyalpm.PKG_REASON_EXPLICIT)
-            # Check orphan status
             if not is_explicit and not loc_pkg.compute_requiredby():
                 is_orphan = True
 
@@ -152,7 +187,6 @@ class AlpmManager:
         )
 
         if load_deep:
-            # Load reverse dependencies and files
             if is_installed and pkg.name in self._local_cache:
                 loc_pkg = self._local_cache[pkg.name]
                 try:
@@ -189,17 +223,29 @@ class AlpmManager:
     def search_packages(
         self,
         query: str = "",
-        scope: str = "all",  # 'all', 'installed', 'explicit', 'dependencies', 'orphans', 'updates'
+        scope: str = "all",  # 'all', 'installed', 'explicit', 'dependencies', 'orphans', 'updates', or 'cat:<name>'
         repo: Optional[str] = None,
-        limit: int = 250,
+        sort_by: str = "name_asc",  # 'name_asc', 'name_desc', 'size_desc', 'size_asc', 'date_desc', 'date_asc'
+        limit: int = 300,
     ) -> List[PackageInfo]:
-        """
-        Fast multi-field package search with smart filtering.
-        """
+        """Fast multi-field package search with sorting and category support."""
         results: List[PackageInfo] = []
         tokens = query.lower().split() if query else []
 
-        def matches_tokens(name_lower: str, desc_lower: str) -> bool:
+        is_category = scope.startswith("cat:")
+        category_name = scope[4:] if is_category else None
+        cat_keywords = CATEGORY_KEYWORDS.get(category_name, []) if category_name else []
+
+        def matches_tokens(name_lower: str, desc_lower: str, groups: List[str]) -> bool:
+            if cat_keywords:
+                matched_cat = False
+                for kw in cat_keywords:
+                    if kw in name_lower or kw in desc_lower or any(kw in g.lower() for g in groups):
+                        matched_cat = True
+                        break
+                if not matched_cat:
+                    return False
+
             if not tokens:
                 return True
             for t in tokens:
@@ -211,7 +257,8 @@ class AlpmManager:
             for name, pkg in self._local_cache.items():
                 name_l = name.lower()
                 desc_l = (pkg.desc or "").lower()
-                if not matches_tokens(name_l, desc_l):
+                groups = list(pkg.groups or [])
+                if not matches_tokens(name_l, desc_l, groups):
                     continue
 
                 is_exp = (pkg.reason == pyalpm.PKG_REASON_EXPLICIT)
@@ -236,7 +283,7 @@ class AlpmManager:
                     continue
                 name_l = name.lower()
                 desc_l = (pkg.desc or "").lower()
-                if not matches_tokens(name_l, desc_l):
+                if not matches_tokens(name_l, desc_l, []):
                     continue
                 pinfo = self._convert_alpm_pkg(pkg, repo_name="local", load_deep=False)
                 pinfo.has_update = True
@@ -245,10 +292,8 @@ class AlpmManager:
                 if len(results) >= limit:
                     break
 
-        else:  # 'all'
+        else:  # 'all' or category
             seen_names = set()
-            # Prioritize local matches first if query is present, then sync
-            # Search sync packages
             for name, pkg_list in self._sync_cache.items():
                 if repo:
                     pkg_list = [p for p in pkg_list if p.db and p.db.name == repo]
@@ -257,7 +302,8 @@ class AlpmManager:
                 pkg = pkg_list[0]
                 name_l = name.lower()
                 desc_l = (pkg.desc or "").lower()
-                if not matches_tokens(name_l, desc_l):
+                groups = list(pkg.groups or [])
+                if not matches_tokens(name_l, desc_l, groups):
                     continue
 
                 results.append(self._convert_alpm_pkg(pkg, repo_name=pkg.db.name if pkg.db else None, load_deep=False))
@@ -265,35 +311,80 @@ class AlpmManager:
                 if len(results) >= limit:
                     break
 
-            # If searching all and there are local-only packages (e.g. foreign/AUR/custom)
             if len(results) < limit:
                 for name, pkg in self._local_cache.items():
                     if name in seen_names:
                         continue
                     name_l = name.lower()
                     desc_l = (pkg.desc or "").lower()
-                    if not matches_tokens(name_l, desc_l):
+                    groups = list(pkg.groups or [])
+                    if not matches_tokens(name_l, desc_l, groups):
                         continue
                     results.append(self._convert_alpm_pkg(pkg, repo_name="local", load_deep=False))
                     if len(results) >= limit:
                         break
 
-        # Sort: exact name match first, starts with query second, then alphabetical
-        if query:
-            q_lower = query.strip().lower()
-            results.sort(
-                key=lambda p: (
-                    0 if p.name.lower() == q_lower else (1 if p.name.lower().startswith(q_lower) else 2),
-                    p.name.lower()
-                )
-            )
-        else:
-            results.sort(key=lambda p: p.name.lower())
-
+        # Sorting logic
+        self._apply_sorting(results, sort_by=sort_by, query=query)
         return results
 
+    def _apply_sorting(self, results: List[PackageInfo], sort_by: str, query: str = ""):
+        """Sort package list based on criteria."""
+        q_lower = query.strip().lower()
+
+        if sort_by == "size_desc":
+            results.sort(key=lambda p: (p.installed_size or p.download_size), reverse=True)
+        elif sort_by == "size_asc":
+            results.sort(key=lambda p: (p.installed_size or p.download_size))
+        elif sort_by == "date_desc":
+            results.sort(key=lambda p: (p.build_date or p.install_date or datetime.min), reverse=True)
+        elif sort_by == "date_asc":
+            results.sort(key=lambda p: (p.build_date or p.install_date or datetime.min))
+        elif sort_by == "name_desc":
+            results.sort(key=lambda p: p.name.lower(), reverse=True)
+        else:  # name_asc (default, with exact search match prefix prioritization)
+            if query:
+                results.sort(
+                    key=lambda p: (
+                        0 if p.name.lower() == q_lower else (1 if p.name.lower().startswith(q_lower) else 2),
+                        p.name.lower(),
+                    )
+                )
+            else:
+                results.sort(key=lambda p: p.name.lower())
+
+    def get_file_owner(self, file_path: str) -> Optional[PackageInfo]:
+        """Find the package that owns a given file path."""
+        clean_path = file_path.strip().lstrip("/")
+        # Check in local cache
+        for name, pkg in self._local_cache.items():
+            for f in (pkg.files or []):
+                fname = f[0] if isinstance(f, (list, tuple)) else str(f)
+                if fname.rstrip("/") == clean_path or fname.endswith(clean_path):
+                    return self.get_package_info(name, deep=True)
+
+        # Fallback to pacman -Qo CLI
+        try:
+            res = subprocess.run(
+                ["pacman", "-Qo", file_path.strip()],
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                text=True,
+                timeout=5,
+            )
+            if res.returncode == 0 and res.stdout:
+                # Format: '/usr/bin/foo is owned by package-name version'
+                parts = res.stdout.strip().split("is owned by")
+                if len(parts) > 1:
+                    pkg_id = parts[1].strip().split()[0]
+                    return self.get_package_info(pkg_id, deep=True)
+        except Exception:
+            pass
+
+        return None
+
     def get_orphans(self) -> List[PackageInfo]:
-        """Find all orphaned packages (installed as deps, no longer required)."""
+        """Find all orphaned packages."""
         orphans = []
         for name, pkg in self._local_cache.items():
             if pkg.reason == pyalpm.PKG_REASON_DEPEND and not pkg.compute_requiredby():
@@ -302,11 +393,8 @@ class AlpmManager:
         return orphans
 
     def get_updates(self) -> List[UpdateInfo]:
-        """
-        Check for pending updates using checkupdates or ALPM comparison.
-        """
+        """Check for pending updates using checkupdates or ALPM comparison."""
         updates: List[UpdateInfo] = []
-        # First try checkupdates CLI utility for most accurate official diff
         try:
             res = subprocess.run(
                 ["checkupdates"],
@@ -317,7 +405,6 @@ class AlpmManager:
             )
             if res.returncode == 0 and res.stdout.strip():
                 for line in res.stdout.strip().splitlines():
-                    # Format: pkgname old_ver -> new_ver
                     parts = line.strip().split()
                     if len(parts) >= 4 and parts[2] == "->":
                         name = parts[0]
@@ -331,7 +418,6 @@ class AlpmManager:
         except Exception:
             pass
 
-        # Fallback to in-memory sync cache comparison
         for name, loc_pkg in self._local_cache.items():
             if name in self._sync_cache:
                 for spkg in self._sync_cache[name]:
@@ -382,7 +468,6 @@ class AlpmManager:
         )
 
         try:
-            # Read tail of log file
             with open(log_path, "r", encoding="utf-8", errors="replace") as f:
                 lines = f.readlines()
                 for line in reversed(lines):

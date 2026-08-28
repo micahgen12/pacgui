@@ -88,11 +88,56 @@ class LogEntry:
 
 
 @dataclass
+class QueueItem:
+    """Represents an item in the multi-package action queue."""
+    pkg_name: str
+    action: str  # 'install', 'remove', 'reinstall'
+    repo: str = ""
+    is_aur: bool = False
+    size: int = 0
+
+    @property
+    def formatted_size(self) -> str:
+        return format_size(self.size)
+
+
+@dataclass
+class FlatpakApp:
+    """Represents a Flatpak application (installed or remote)."""
+    app_id: str
+    name: str
+    version: str = ""
+    branch: str = "stable"
+    arch: str = ""
+    origin: str = "flathub"
+    desc: str = ""
+    is_installed: bool = False
+    installed_size: int = 0
+    download_size: int = 0
+
+    @property
+    def formatted_size(self) -> str:
+        return format_size(self.installed_size or self.download_size)
+
+
+@dataclass
+class SnapshotInfo:
+    """Represents an exported package list snapshot."""
+    file_path: str
+    name: str
+    created_at: str
+    package_count: int
+    packages: List[str] = field(default_factory=list)
+
+
+@dataclass
 class TransactionTask:
     """Represents a transaction to be executed via runner."""
-    action_type: str  # 'install', 'remove', 'upgrade', 'clean_cache', 'remove_orphans', 'aur_install', 'aur_remove'
+    action_type: str  # 'install', 'remove', 'reinstall', 'upgrade', 'clean_cache', 'clean_cache_all', 'remove_orphans', 'batch', 'rank_mirrors', 'repair_keyring', 'unlock_db', 'flatpak_install', 'flatpak_remove', 'flatpak_update', 'custom'
     packages: List[str]
     title: str
     description: str
     flags: List[str] = field(default_factory=list)
+    remove_packages: List[str] = field(default_factory=list)
     use_aur_helper: bool = False
+    extra_command: Optional[List[str]] = None

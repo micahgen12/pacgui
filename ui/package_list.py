@@ -1,5 +1,5 @@
 """
-Package list view showing filterable, searchable packages with quick action controls.
+Package list view showing filterable, searchable packages with sorting and queue controls.
 """
 
 from typing import Callable, List, Optional
@@ -10,7 +10,7 @@ gi.require_version("Gtk", "4.0")
 gi.require_version("Adw", "1")
 from gi.repository import Adw, GLib, GObject, Gtk, Pango
 
-from backend.models import PackageInfo
+from backend.models import PackageInfo, QueueItem
 
 
 class PackageRow(Gtk.ListBoxRow):
@@ -20,10 +20,12 @@ class PackageRow(Gtk.ListBoxRow):
         self,
         pkg: PackageInfo,
         on_action: Optional[Callable[[str, PackageInfo, bool], None]] = None,
+        on_queue: Optional[Callable[[QueueItem], None]] = None,
     ):
         super().__init__()
         self.pkg = pkg
         self.on_action = on_action
+        self.on_queue = on_queue
 
         self._setup_ui()
 
@@ -58,7 +60,7 @@ class PackageRow(Gtk.ListBoxRow):
         mid_box.set_hexpand(True)
         box.append(mid_box)
 
-        # Top row in mid_box: Name + Version + Repo Badge
+        # Top row in mid_box: Name + Version + Repo Badge + Size
         top_row = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
         mid_box.append(top_row)
 
@@ -68,10 +70,15 @@ class PackageRow(Gtk.ListBoxRow):
         ver_label = Gtk.Label(label=self.pkg.version, css_classes=["package-version"], halign=Gtk.Align.START)
         top_row.append(ver_label)
 
-        # Repo Badge
         repo_class = "badge-aur" if self.pkg.is_aur else "badge-repo"
         repo_badge = Gtk.Label(label=self.pkg.repo, css_classes=["badge-pill", repo_class], halign=Gtk.Align.START)
         top_row.append(repo_badge)
+
+        if self.pkg.installed_size > 0 or self.pkg.download_size > 0:
+            sz_str = self.pkg.formatted_installed_size if self.pkg.is_installed else self.pkg.formatted_download_size
+            sz_label = Gtk.Label(label=sz_str, css_classes=["caption"], halign=Gtk.Align.START)
+            sz_label.set_opacity(0.7)
+            top_row.append(sz_label)
 
         # Description row
         desc_text = self.pkg.desc or "No description."
@@ -84,7 +91,12 @@ class PackageRow(Gtk.ListBoxRow):
         )
         mid_box.append(desc_label)
 
-        # Right side: Quick Action Button
+        # Right side: Queue button & Direct Action Button
+        btn_q = Gtk.Button(icon_name="list-add-symbolic", css_classes=["flat", "circular"])
+        btn_q.set_tooltip_text("Add to Action Queue")
+        btn_q.connect("clicked", self._on_queue_clicked)
+        box.append(btn_q)
+
         if self.pkg.is_installed:
             btn = Gtk.Button(icon_name="user-trash-symbolic", css_classes=["flat", "circular"])
             btn.set_tooltip_text("Remove Package")
@@ -95,6 +107,18 @@ class PackageRow(Gtk.ListBoxRow):
             btn.set_tooltip_text("Install Package")
             btn.connect("clicked", self._on_quick_install)
             box.append(btn)
+
+    def _on_queue_clicked(self, _btn):
+        if self.on_queue:
+            act = "remove" if self.pkg.is_installed else "install"
+            item = QueueItem(
+                pkg_name=self.pkg.name,
+                action=act,
+                repo=self.pkg.repo,
+                is_aur=self.pkg.is_aur,
+                size=self.pkg.installed_size or self.pkg.download_size,
+            )
+            self.on_queue(item)
 
     def _on_quick_install(self, _btn):
         if self.on_action:
@@ -113,15 +137,44 @@ class PackageListView(Gtk.Box):
         self,
         on_selected: Optional[Callable[[PackageInfo], None]] = None,
         on_action: Optional[Callable[[str, PackageInfo, bool], None]] = None,
+        on_queue: Optional[Callable[[QueueItem], None]] = None,
+        on_sort_changed: Optional[Callable[[str], None]] = None,
     ):
         super().__init__(orientation=Gtk.Orientation.VERTICAL, spacing=0)
         self.on_selected = on_selected
         self.on_action = on_action
+        self.on_queue = on_queue
+        self.on_sort_changed = on_sort_changed
         self.packages: List[PackageInfo] = []
 
         self._setup_ui()
 
     def _setup_ui(self):
+        # Sort header bar
+        sort_bar = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL, spacing=8)
+        sort_bar.set_margin_start(12)
+        sort_bar.set_margin_end(12)
+        sort_bar.set_margin_top(6)
+        sort_bar.set_margin_bottom(6)
+        self.append(sort_bar)
+
+        self.count_badge = Gtk.Label(label="0 packages", css_classes=["caption"], halign=Gtk.Align.START, hexpand=True)
+        sort_bar.append(self.count_badge)
+
+        sort_lbl = Gtk.Label(label="Sort:", css_classes=["caption"])
+        sort_bar.append(sort_lbl)
+
+        sort_options = [
+            "Name (A-Z)",
+            "Name (Z-A)",
+            "Size (Largest First)",
+            "Size (Smallest First)",
+            "Build Date (Newest)",
+        ]
+        self.sort_dropdown = Gtk.DropDown.new_from_strings(sort_options)
+        self.sort_dropdown.connect("notify::selected", self._on_sort_selected)
+        sort_bar.append(self.sort_dropdown)
+
         # Scrolled window containing list box
         self.scrolled = Gtk.ScrolledWindow(vexpand=True, hexpand=True)
         self.append(self.scrolled)
@@ -146,8 +199,8 @@ class PackageListView(Gtk.Box):
     def set_packages(self, packages: List[PackageInfo]):
         """Load and display package list."""
         self.packages = packages
+        self.count_badge.set_label(f"{len(packages)} packages")
 
-        # Clear existing rows
         while child := self.list_box.get_first_child():
             self.list_box.remove(child)
 
@@ -160,13 +213,25 @@ class PackageListView(Gtk.Box):
         self.scrolled.set_visible(True)
 
         for pkg in packages:
-            row = PackageRow(pkg, on_action=self.on_action)
+            row = PackageRow(pkg, on_action=self.on_action, on_queue=self.on_queue)
             self.list_box.append(row)
 
-        # Select first row by default if available
         first = self.list_box.get_row_at_index(0)
         if first:
             self.list_box.select_row(first)
+
+    def _on_sort_selected(self, dropdown, _param):
+        idx = dropdown.get_selected()
+        mapping = {
+            0: "name_asc",
+            1: "name_desc",
+            2: "size_desc",
+            3: "size_asc",
+            4: "date_desc",
+        }
+        key = mapping.get(idx, "name_asc")
+        if self.on_sort_changed:
+            self.on_sort_changed(key)
 
     def _on_row_selected(self, _box, row):
         if row and isinstance(row, PackageRow) and self.on_selected:

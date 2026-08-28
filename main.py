@@ -17,6 +17,9 @@ from gi.repository import Adw, Gdk, Gio, GLib, Gtk
 
 from backend.alpm_manager import AlpmManager
 from backend.aur_manager import AurManager
+from backend.flatpak_manager import FlatpakManager
+from backend.mirror_manager import MirrorManager
+from backend.snapshot_manager import SnapshotManager
 from ui.window import MainWindow
 
 
@@ -30,6 +33,9 @@ class PacGuiApplication(Adw.Application):
         )
         self.alpm_mgr = AlpmManager()
         self.aur_mgr = AurManager()
+        self.flatpak_mgr = FlatpakManager()
+        self.mirror_mgr = MirrorManager()
+        self.snapshot_mgr = SnapshotManager()
         self.main_window = None
 
     def do_startup(self):
@@ -40,7 +46,14 @@ class PacGuiApplication(Adw.Application):
 
     def do_activate(self):
         if not self.main_window:
-            self.main_window = MainWindow(self, self.alpm_mgr, self.aur_mgr)
+            self.main_window = MainWindow(
+                self,
+                self.alpm_mgr,
+                self.aur_mgr,
+                self.flatpak_mgr,
+                self.mirror_mgr,
+                self.snapshot_mgr,
+            )
         self.main_window.present()
 
     def _load_css(self):
@@ -59,27 +72,26 @@ class PacGuiApplication(Adw.Application):
 
     def _setup_actions(self):
         """Register application actions."""
-        # Refresh / Check updates
         action_updates = Gio.SimpleAction.new("check_updates", None)
         action_updates.connect("activate", lambda *_: self.main_window.check_updates(show_toast=True) if self.main_window else None)
         self.add_action(action_updates)
 
-        # Clean cache
         action_cache = Gio.SimpleAction.new("clean_cache", None)
         action_cache.connect("activate", lambda *_: self.main_window._handle_clean_cache("clean_cache") if self.main_window else None)
         self.add_action(action_cache)
 
-        # Toggle Theme
+        action_find = Gio.SimpleAction.new("find_file", None)
+        action_find.connect("activate", lambda *_: self.main_window._on_find_file_owner_clicked(None) if self.main_window else None)
+        self.add_action(action_find)
+
         action_theme = Gio.SimpleAction.new("toggle_theme", None)
         action_theme.connect("activate", self._on_toggle_theme)
         self.add_action(action_theme)
 
-        # About dialog
         action_about = Gio.SimpleAction.new("about", None)
         action_about.connect("activate", self._on_show_about)
         self.add_action(action_about)
 
-        # Quit
         action_quit = Gio.SimpleAction.new("quit", None)
         action_quit.connect("activate", lambda *_: self.quit())
         self.add_action(action_quit)
@@ -88,6 +100,7 @@ class PacGuiApplication(Adw.Application):
         """Setup keyboard shortcuts."""
         self.set_accels_for_action("app.quit", ["<Ctrl>Q"])
         self.set_accels_for_action("app.check_updates", ["<Ctrl>U"])
+        self.set_accels_for_action("app.find_file", ["<Ctrl>O"])
 
     def _on_toggle_theme(self, _action, _param):
         """Toggle between Dark, Light, and Default color schemes."""
@@ -106,12 +119,12 @@ class PacGuiApplication(Adw.Application):
             application_name="PacGUI",
             application_icon="system-software-install-symbolic",
             developer_name="Antigravity Team & Arch Community",
-            version="1.0.0",
+            version="2.0.0",
             copyright="© 2026",
-            issue_url="https://github.com/archlinux/pacman",
-            website="https://archlinux.org/pacman/",
+            issue_url="https://github.com/micahgen12/pacgui",
+            website="https://github.com/micahgen12/pacgui",
             license_type=Gtk.License.GPL_3_0,
-            comments="Fast, modern GTK4 / Libadwaita Graphical Package Manager for Arch Linux powered by native pyalpm.",
+            comments="Fast, modern GTK4 / Libadwaita Graphical Package Manager for Arch Linux & ALPM distributions.",
         )
         about.present()
 
